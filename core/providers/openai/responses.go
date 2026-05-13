@@ -100,7 +100,7 @@ func ToOpenAIResponsesRequest(bifrostReq *schemas.BifrostResponsesRequest) *Open
 
 		if message.ResponsesReasoning != nil {
 			isGptOss := strings.Contains(bifrostReq.Model, "gpt-oss")
-			isReasoning := isOpenAIReasoningModel(bifrostReq.Model)
+			isReasoning := IsOpenAIReasoningModel(bifrostReq.Model)
 
 			// For non-gpt-oss models, skip reasoning-only messages that have content blocks but no summaries.
 			// For non-reasoning models (e.g., gpt-4o), also skip when EncryptedContent is present since
@@ -234,7 +234,7 @@ func ToOpenAIResponsesRequest(bifrostReq *schemas.BifrostResponsesRequest) *Open
 			// Handle OpenAI-specific parameter filtering
 			// Only o1/o3 series models support reasoning.effort
 			// Regular models like gpt-4o, gpt-4, gpt-3.5-turbo don't support it
-			if bifrostReq.Provider == schemas.OpenAI && !isOpenAIReasoningModel(bifrostReq.Model) {
+			if bifrostReq.Provider == schemas.OpenAI && !IsOpenAIReasoningModel(bifrostReq.Model) {
 				// Clear reasoning for non-reasoning OpenAI models to avoid API errors
 				req.ResponsesParameters.Reasoning = nil
 			}
@@ -242,7 +242,7 @@ func ToOpenAIResponsesRequest(bifrostReq *schemas.BifrostResponsesRequest) *Open
 
 		// Strip top_p for OpenAI reasoning models (o1/o3 series) which reject it
 		// GPT-5.x accept top_p when reasoning.effort is "none" (defaults to "none" when omitted)
-		if isOpenAIReasoningModel(bifrostReq.Model) {
+		if IsOpenAIReasoningModel(bifrostReq.Model) {
 			stripTopP := true
 			_, parsedModel := schemas.ParseModelString(bifrostReq.Model, schemas.OpenAI)
 			modelLower := strings.ToLower(parsedModel)

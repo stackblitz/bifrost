@@ -52,13 +52,13 @@ func ConvertBifrostMessagesToOpenAIMessages(messages []schemas.ChatMessage) []Op
 	return openaiMessages
 }
 
-// isOpenAIReasoningModel checks if the given model is an OpenAI reasoning model
+// IsOpenAIReasoningModel checks if the given model is an OpenAI reasoning model
 // that supports the reasoning.effort parameter.
 // OpenAI reasoning models include o1, o3, o4 series and GPT-5.x variants.
 // Note: -pro and -codex variants (e.g. gpt-5.2-pro, gpt-5.2-codex) are always-reasoning
 // models that do NOT support effort "none" — callers must handle top_p stripping separately.
 // TODO we need to find a better way to check if a model is an OpenAI reasoning model
-func isOpenAIReasoningModel(model string) bool {
+func IsOpenAIReasoningModel(model string) bool {
 	_, parsedModel := schemas.ParseModelString(model, schemas.OpenAI)
 	if parsedModel != "" {
 		model = parsedModel

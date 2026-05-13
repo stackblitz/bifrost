@@ -4,8 +4,36 @@ import (
 	"strings"
 
 	"github.com/maximhq/bifrost/core/providers/anthropic"
+	"github.com/maximhq/bifrost/core/providers/openai"
 	"github.com/maximhq/bifrost/core/schemas"
 )
+
+// stripUnsupportedReasoningChat clears reasoning parameters for Azure deployments
+// whose underlying model is not an OpenAI reasoning model (e.g. kimi-k2.6, minimax, glm),
+// which reject reasoning.effort with HTTP 400. Azure owns this decision because Azure
+// deployments are not "OpenAI provider" models even though they route through the
+// OpenAI-compatible API.
+func stripUnsupportedReasoningChat(req *openai.OpenAIChatRequest, model string) {
+	if req == nil {
+		return
+	}
+	if openai.IsOpenAIReasoningModel(model) {
+		return
+	}
+	req.ChatParameters.Reasoning = nil
+}
+
+// stripUnsupportedReasoningResponses is the Responses-API counterpart to
+// stripUnsupportedReasoningChat.
+func stripUnsupportedReasoningResponses(req *openai.OpenAIResponsesRequest, model string) {
+	if req == nil {
+		return
+	}
+	if openai.IsOpenAIReasoningModel(model) {
+		return
+	}
+	req.ResponsesParameters.Reasoning = nil
+}
 
 // getRequestBodyForAnthropicResponses serializes a BifrostResponsesRequest into the Anthropic wire format for Azure.
 // It delegates to BuildAnthropicResponsesRequestBody with the Azure provider and the target deployment name.

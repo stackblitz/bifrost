@@ -522,7 +522,9 @@ func (provider *AzureProvider) ChatCompletion(ctx *schemas.BifrostContext, key s
 				}
 				return reqBody, nil
 			} else {
-				return openai.ToOpenAIChatRequest(ctx, request), nil
+				reqBody := openai.ToOpenAIChatRequest(ctx, request)
+				stripUnsupportedReasoningChat(reqBody, request.Model)
+				return reqBody, nil
 			}
 		})
 	if bifrostErr != nil {
@@ -672,7 +674,10 @@ func (provider *AzureProvider) ChatCompletionStream(ctx *schemas.BifrostContext,
 			nil,
 			nil,
 			nil,
-			nil,
+			func(req *openai.OpenAIChatRequest) *openai.OpenAIChatRequest {
+				stripUnsupportedReasoningChat(req, request.Model)
+				return req
+			},
 			nil,
 			provider.logger,
 			postHookSpanFinalizer,
@@ -694,6 +699,7 @@ func (provider *AzureProvider) Responses(ctx *schemas.BifrostContext, key schema
 			request,
 			func() (providerUtils.RequestBodyWithExtraParams, error) {
 				reqBody := openai.ToOpenAIResponsesRequest(request)
+				stripUnsupportedReasoningResponses(reqBody, request.Model)
 				return reqBody, nil
 			})
 	}
@@ -822,7 +828,10 @@ func (provider *AzureProvider) ResponsesStream(ctx *schemas.BifrostContext, post
 			postHookRunner,
 			nil,
 			nil,
-			nil,
+			func(req *openai.OpenAIResponsesRequest) *openai.OpenAIResponsesRequest {
+				stripUnsupportedReasoningResponses(req, request.Model)
+				return req
+			},
 			nil,
 			provider.logger,
 			postHookSpanFinalizer,
