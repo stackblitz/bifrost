@@ -892,6 +892,22 @@ func processProvider(
 			return fmt.Errorf("invalid aliases for key %q in provider %s: %w", providerKeyInFile.Name, provider, err)
 		}
 	}
+	// resolve env.* references in network_config.extra_headers values so secrets
+	// (e.g. Authorization headers derived from BASETEN_API_KEY) can live in env
+	// rather than config.json. Values without the "env." prefix are left as-is.
+	if providerCfgInFile.NetworkConfig != nil && providerCfgInFile.NetworkConfig.ExtraHeaders != nil {
+		for k, v := range providerCfgInFile.NetworkConfig.ExtraHeaders {
+			if !strings.HasPrefix(strings.TrimSpace(v), "env.") {
+				continue
+			}
+			envValue, err := envutils.ProcessEnvValue(v)
+			if err != nil {
+				logger.Warn("extra_headers[%s] for provider %s: %v; keeping original value", k, provider, err)
+				continue
+			}
+			providerCfgInFile.NetworkConfig.ExtraHeaders[k] = envValue
+		}
+	}
 	// Generate hash from config.json provider config
 	fileProviderConfigHash, err := providerCfgInFile.GenerateConfigHash(string(provider))
 	if err != nil {
