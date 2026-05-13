@@ -278,11 +278,14 @@ func (provider *AzureProvider) completeRequest(
 		req.SetBody(jsonData)
 	}
 
+	provider.logger.Info("[azure] completeRequest dispatch url=%s method=POST body_bytes=%d", url, len(jsonData))
+
 	// Send the request with optional large response streaming
 	activeClient := providerUtils.PrepareResponseStreaming(ctx, provider.client, resp)
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
 	defer wait()
 	if bifrostErr != nil {
+		provider.logger.Warn("[azure] completeRequest transport error url=%s latency=%s err=%v", url, latency, bifrostErr)
 		return nil, latency, nil, bifrostErr
 	}
 
@@ -290,10 +293,17 @@ func (provider *AzureProvider) completeRequest(
 	// so error responses also carry provider headers (rate-limit info, request IDs, etc.)
 	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
 
+	provider.logger.Info("[azure] completeRequest response status=%d latency=%s url=%s", resp.StatusCode(), latency, url)
+
 	// Handle error response
 	if resp.StatusCode() != fasthttp.StatusOK {
 		providerUtils.MaterializeStreamErrorBody(ctx, resp)
 		rawErrBody := append([]byte(nil), resp.Body()...)
+		snippet := rawErrBody
+		if len(snippet) > 1024 {
+			snippet = snippet[:1024]
+		}
+		provider.logger.Warn("[azure] completeRequest non-200 status=%d url=%s body=%s headers=%v", resp.StatusCode(), url, string(snippet), providerResponseHeaders)
 		return rawErrBody, latency, providerResponseHeaders, openai.ParseOpenAIError(resp)
 	}
 
@@ -507,6 +517,8 @@ func (provider *AzureProvider) TextCompletionStream(ctx *schemas.BifrostContext,
 // It formats the request, sends it to Azure, and processes the response.
 // Returns a BifrostResponse containing the completion results or an error if the request fails.
 func (provider *AzureProvider) ChatCompletion(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostChatRequest) (*schemas.BifrostChatResponse, *schemas.BifrostError) {
+	chatStart := time.Now()
+	provider.logger.Info("[azure] ChatCompletion start model=%s anthropic=%v", request.Model, schemas.IsAnthropicModel(request.Model))
 	jsonData, bifrostErr := providerUtils.CheckContextAndGetRequestBody(
 		ctx,
 		request,
@@ -536,6 +548,7 @@ func (provider *AzureProvider) ChatCompletion(ctx *schemas.BifrostContext, key s
 		path = fmt.Sprintf("openai/deployments/%s/chat/completions", request.Model)
 	}
 
+	provider.logger.Info("[azure] ChatCompletion sending request model=%s path=%s body_bytes=%d prep_elapsed=%s", request.Model, path, len(jsonData), time.Since(chatStart))
 	responseBody, latency, providerResponseHeaders, err := provider.completeRequest(
 		ctx,
 		jsonData,
@@ -547,8 +560,10 @@ func (provider *AzureProvider) ChatCompletion(ctx *schemas.BifrostContext, key s
 		ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 	}
 	if err != nil {
+		provider.logger.Warn("[azure] ChatCompletion failed model=%s latency=%s total_elapsed=%s err=%v", request.Model, latency, time.Since(chatStart), err)
 		return nil, providerUtils.EnrichError(ctx, err, jsonData, nil, provider.sendBackRawRequest, provider.sendBackRawResponse)
 	}
+	provider.logger.Info("[azure] ChatCompletion provider_latency=%s resp_bytes=%d", latency, len(responseBody))
 
 	// Large response mode: return lightweight response with metadata only
 	if isLargeResp, _ := ctx.Value(schemas.BifrostContextKeyLargeResponseMode).(bool); isLargeResp {
@@ -593,6 +608,7 @@ func (provider *AzureProvider) ChatCompletion(ctx *schemas.BifrostContext, key s
 		response.ExtraFields.RawResponse = rawResponse
 	}
 
+	provider.logger.Info("[azure] ChatCompletion done model=%s total_elapsed=%s", request.Model, time.Since(chatStart))
 	return response, nil
 }
 
@@ -601,6 +617,7 @@ func (provider *AzureProvider) ChatCompletion(ctx *schemas.BifrostContext, key s
 // Uses Azure-specific URL construction with deployments and supports both api-key and Bearer token authentication.
 // Returns a channel containing BifrostResponse objects representing the stream or an error if the request fails.
 func (provider *AzureProvider) ChatCompletionStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+	provider.logger.Info("[azure] ChatCompletionStream start model=%s anthropic=%v", request.Model, schemas.IsAnthropicModel(request.Model))
 	var url string
 	if schemas.IsAnthropicModel(request.Model) {
 		authHeader, err := provider.getAzureAuthHeaders(ctx, key, true)
@@ -656,6 +673,7 @@ func (provider *AzureProvider) ChatCompletionStream(ctx *schemas.BifrostContext,
 			apiVersion = schemas.NewEnvVar(AzureAPIVersionDefault)
 		}
 		url = fmt.Sprintf("%s/openai/deployments/%s/chat/completions?api-version=%s", key.AzureKeyConfig.Endpoint.GetValue(), request.Model, apiVersion.GetValue())
+		provider.logger.Info("[azure] ChatCompletionStream dispatch url=%s", url)
 
 		// Use shared streaming logic from OpenAI
 		return openai.HandleOpenAIChatCompletionStreaming(
@@ -684,10 +702,12 @@ func (provider *AzureProvider) ChatCompletionStream(ctx *schemas.BifrostContext,
 // It formats the request, sends it to Azure, and processes the response.
 // Returns a BifrostResponse containing the completion results or an error if the request fails.
 func (provider *AzureProvider) Responses(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
+	provider.logger.Info("[azure] Responses start model=%s anthropic=%v chatOnly=%v", request.Model, schemas.IsAnthropicModel(request.Model), isAzureChatCompletionsOnlyModel(request.Model))
 	// Azure deployments backed by third-party / open-source models (kimi, minimax,
 	// glm, deepseek, qwen, etc.) don't expose the OpenAI Responses API. Internally
 	// fall back to Chat Completions so callers using the Responses API still work.
 	if !schemas.IsAnthropicModel(request.Model) && isAzureChatCompletionsOnlyModel(request.Model) {
+		provider.logger.Info("[azure] Responses falling back to ChatCompletion model=%s", request.Model)
 		ctx.SetValue(schemas.BifrostContextKeyIsResponsesToChatCompletionFallback, true)
 		chatResponse, err := provider.ChatCompletion(ctx, key, request.ToChatRequest())
 		if err != nil {
@@ -782,8 +802,10 @@ func (provider *AzureProvider) Responses(ctx *schemas.BifrostContext, key schema
 
 // ResponsesStream performs a streaming responses request to Azure's API.
 func (provider *AzureProvider) ResponsesStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+	provider.logger.Info("[azure] ResponsesStream start model=%s anthropic=%v chatOnly=%v", request.Model, schemas.IsAnthropicModel(request.Model), isAzureChatCompletionsOnlyModel(request.Model))
 	// Mirror Responses(): third-party Azure deployments only support Chat Completions.
 	if !schemas.IsAnthropicModel(request.Model) && isAzureChatCompletionsOnlyModel(request.Model) {
+		provider.logger.Info("[azure] ResponsesStream falling back to ChatCompletionStream model=%s", request.Model)
 		ctx.SetValue(schemas.BifrostContextKeyIsResponsesToChatCompletionFallback, true)
 		return provider.ChatCompletionStream(ctx, postHookRunner, postHookSpanFinalizer, key, request.ToChatRequest())
 	}
