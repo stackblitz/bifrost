@@ -684,6 +684,18 @@ func (provider *AzureProvider) ChatCompletionStream(ctx *schemas.BifrostContext,
 // It formats the request, sends it to Azure, and processes the response.
 // Returns a BifrostResponse containing the completion results or an error if the request fails.
 func (provider *AzureProvider) Responses(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
+	// Azure deployments backed by third-party / open-source models (kimi, minimax,
+	// glm, deepseek, qwen, etc.) don't expose the OpenAI Responses API. Internally
+	// fall back to Chat Completions so callers using the Responses API still work.
+	if !schemas.IsAnthropicModel(request.Model) && isAzureChatCompletionsOnlyModel(request.Model) {
+		ctx.SetValue(schemas.BifrostContextKeyIsResponsesToChatCompletionFallback, true)
+		chatResponse, err := provider.ChatCompletion(ctx, key, request.ToChatRequest())
+		if err != nil {
+			return nil, err
+		}
+		return chatResponse.ToBifrostResponsesResponse(), nil
+	}
+
 	var jsonData []byte
 	var bifrostErr *schemas.BifrostError
 	if schemas.IsAnthropicModel(request.Model) {
@@ -770,6 +782,12 @@ func (provider *AzureProvider) Responses(ctx *schemas.BifrostContext, key schema
 
 // ResponsesStream performs a streaming responses request to Azure's API.
 func (provider *AzureProvider) ResponsesStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+	// Mirror Responses(): third-party Azure deployments only support Chat Completions.
+	if !schemas.IsAnthropicModel(request.Model) && isAzureChatCompletionsOnlyModel(request.Model) {
+		ctx.SetValue(schemas.BifrostContextKeyIsResponsesToChatCompletionFallback, true)
+		return provider.ChatCompletionStream(ctx, postHookRunner, postHookSpanFinalizer, key, request.ToChatRequest())
+	}
+
 	var url string
 	if schemas.IsAnthropicModel(request.Model) {
 		authHeader, err := provider.getAzureAuthHeaders(ctx, key, true)
