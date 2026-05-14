@@ -1342,27 +1342,37 @@ func HandleOpenAIChatCompletionStreaming(
 // translating Responses-API calls into Chat Completions. Triggered when a chat
 // path override is configured without a corresponding responses override.
 func (provider *OpenAIProvider) shouldFallbackResponsesToChat() bool {
-	if provider.customProviderConfig == nil {
-		return false
+	result := func() bool {
+		if provider.customProviderConfig == nil {
+			return false
+		}
+		over := provider.customProviderConfig.RequestPathOverrides
+		if over == nil {
+			return false
+		}
+		_, hasChat := over[schemas.ChatCompletionRequest]
+		if !hasChat {
+			_, hasChat = over[schemas.ChatCompletionStreamRequest]
+		}
+		if !hasChat {
+			return false
+		}
+		if _, hasResp := over[schemas.ResponsesRequest]; hasResp {
+			return false
+		}
+		if _, hasResp := over[schemas.ResponsesStreamRequest]; hasResp {
+			return false
+		}
+		return true
+	}()
+	if provider.logger != nil {
+		over := map[schemas.RequestType]string{}
+		if provider.customProviderConfig != nil && provider.customProviderConfig.RequestPathOverrides != nil {
+			over = provider.customProviderConfig.RequestPathOverrides
+		}
+		provider.logger.Debug("shouldFallbackResponsesToChat=%v customConfig=%v overrides=%v", result, provider.customProviderConfig != nil, over)
 	}
-	over := provider.customProviderConfig.RequestPathOverrides
-	if over == nil {
-		return false
-	}
-	_, hasChat := over[schemas.ChatCompletionRequest]
-	if !hasChat {
-		_, hasChat = over[schemas.ChatCompletionStreamRequest]
-	}
-	if !hasChat {
-		return false
-	}
-	if _, hasResp := over[schemas.ResponsesRequest]; hasResp {
-		return false
-	}
-	if _, hasResp := over[schemas.ResponsesStreamRequest]; hasResp {
-		return false
-	}
-	return true
+	return result
 }
 
 func (provider *OpenAIProvider) Responses(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
