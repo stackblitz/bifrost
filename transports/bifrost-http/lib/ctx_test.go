@@ -2,6 +2,7 @@ package lib
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
@@ -14,7 +15,9 @@ import (
 
 // testHandlerStore is a minimal HandlerStore for ctx tests.
 type testHandlerStore struct {
-	matcher *HeaderMatcher
+	matcher      *HeaderMatcher
+	allowStorage bool
+	allowRaw     bool
 }
 
 func (s testHandlerStore) GetHeaderMatcher() *HeaderMatcher                      { return s.matcher }
@@ -26,8 +29,8 @@ func (s testHandlerStore) GetKVStore() *kvstore.Store                           
 func (s testHandlerStore) GetMCPHeaderCombinedAllowlist() schemas.WhiteList {
 	return schemas.WhiteList{}
 }
-func (s testHandlerStore) ShouldAllowPerRequestStorageOverride() bool { return false }
-func (s testHandlerStore) ShouldAllowPerRequestRawOverride() bool     { return false }
+func (s testHandlerStore) ShouldAllowPerRequestStorageOverride() bool { return s.allowStorage }
+func (s testHandlerStore) ShouldAllowPerRequestRawOverride() bool     { return s.allowRaw }
 func (s testHandlerStore) GetMCPExternalServerURL() string            { return "" }
 func (s testHandlerStore) GetMCPExternalClientURL() string            { return "" }
 
@@ -93,6 +96,67 @@ func TestConvertToBifrostContext_SecondCallReturnsSameSharedContext(t *testing.T
 	}
 	if first != second {
 		t.Fatal("expected ConvertToBifrostContext to reuse the shared context on repeated calls")
+	}
+}
+
+func TestConvertToBifrostContext_NativeRequestLoggingHeaders(t *testing.T) {
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.Set("x-bf-store-inbound-request", "true")
+	ctx.Request.Header.Set("x-bf-store-internal-bifrost-request", "false")
+
+	bifrostCtx, cancel := ConvertToBifrostContext(ctx, testHandlerStore{allowStorage: true})
+	defer cancel()
+
+	if got, _ := bifrostCtx.Value(schemas.BifrostContextKeyAllowPerRequestStorageOverride).(bool); !got {
+		t.Fatal("expected per-request storage overrides to be enabled")
+	}
+	if got, ok := bifrostCtx.Value(schemas.BifrostContextKeyStoreInboundRequest).(bool); !ok || !got {
+		t.Fatalf("expected store inbound request override true, got value=%v ok=%v", got, ok)
+	}
+	if got, ok := bifrostCtx.Value(schemas.BifrostContextKeyStoreInternalBifrostRequest).(bool); !ok || got {
+		t.Fatalf("expected store internal bifrost request override false, got value=%v ok=%v", got, ok)
+	}
+}
+
+func TestConvertToBifrostContext_CapturesInboundRequestSnapshot(t *testing.T) {
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod("POST")
+	ctx.Request.SetRequestURI("/v1/chat/completions?debug=true")
+	ctx.Request.Header.Set("x-test-header", "test-value")
+	ctx.Request.SetBodyString(`{"model":"openai/gpt-4o-mini","messages":[]}`)
+
+	bifrostCtx, cancel := ConvertToBifrostContext(ctx, testHandlerStore{})
+	defer cancel()
+
+	snapshot, ok := bifrostCtx.Value(schemas.BifrostContextKeyInboundRequestJSON).(string)
+	if !ok || snapshot == "" {
+		t.Fatal("expected inbound request JSON snapshot in context")
+	}
+
+	var req struct {
+		Method  string            `json:"method"`
+		Path    string            `json:"path"`
+		Headers map[string]string `json:"headers"`
+		Query   map[string]string `json:"query"`
+		Body    string            `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(snapshot), &req); err != nil {
+		t.Fatalf("failed to unmarshal inbound request snapshot: %v", err)
+	}
+	if req.Method != "POST" {
+		t.Fatalf("expected method POST, got %q", req.Method)
+	}
+	if req.Path != "/v1/chat/completions" {
+		t.Fatalf("expected path /v1/chat/completions, got %q", req.Path)
+	}
+	if req.Headers["X-Test-Header"] != "test-value" {
+		t.Fatalf("expected x-test-header to be captured, got %q", req.Headers["X-Test-Header"])
+	}
+	if req.Query["debug"] != "true" {
+		t.Fatalf("expected debug query param to be captured, got %q", req.Query["debug"])
+	}
+	if req.Body != `{"model":"openai/gpt-4o-mini","messages":[]}` {
+		t.Fatalf("unexpected body snapshot: %q", req.Body)
 	}
 }
 

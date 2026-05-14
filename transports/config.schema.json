@@ -731,6 +731,14 @@
                 "type": "boolean",
                 "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
               },
+              "store_inbound_request": {
+                "type": "boolean",
+                "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+              },
+              "store_internal_bifrost_request": {
+                "type": "boolean",
+                "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
+              },
               "network_config": {
                 "$ref": "#/$defs/network_config"
               },
@@ -2466,6 +2474,14 @@
           "type": "boolean",
           "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
         },
+        "store_inbound_request": {
+          "type": "boolean",
+          "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+        },
+        "store_internal_bifrost_request": {
+          "type": "boolean",
+          "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
+        },
         "custom_provider_config": {
           "$ref": "#/$defs/custom_provider_config"
         }
@@ -2504,6 +2520,14 @@
         "store_raw_request_response": {
           "type": "boolean",
           "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
+        },
+        "store_inbound_request": {
+          "type": "boolean",
+          "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+        },
+        "store_internal_bifrost_request": {
+          "type": "boolean",
+          "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
         },
         "custom_provider_config": {
           "$ref": "#/$defs/custom_provider_config"
@@ -2544,6 +2568,14 @@
           "type": "boolean",
           "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
         },
+        "store_inbound_request": {
+          "type": "boolean",
+          "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+        },
+        "store_internal_bifrost_request": {
+          "type": "boolean",
+          "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
+        },
         "custom_provider_config": {
           "$ref": "#/$defs/custom_provider_config"
         }
@@ -2582,6 +2614,14 @@
         "store_raw_request_response": {
           "type": "boolean",
           "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
+        },
+        "store_inbound_request": {
+          "type": "boolean",
+          "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+        },
+        "store_internal_bifrost_request": {
+          "type": "boolean",
+          "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
         },
         "custom_provider_config": {
           "$ref": "#/$defs/custom_provider_config"
@@ -2622,6 +2662,14 @@
           "type": "boolean",
           "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
         },
+        "store_inbound_request": {
+          "type": "boolean",
+          "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+        },
+        "store_internal_bifrost_request": {
+          "type": "boolean",
+          "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
+        },
         "custom_provider_config": {
           "$ref": "#/$defs/custom_provider_config"
         }
@@ -2660,6 +2708,14 @@
         "store_raw_request_response": {
           "type": "boolean",
           "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
+        },
+        "store_inbound_request": {
+          "type": "boolean",
+          "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+        },
+        "store_internal_bifrost_request": {
+          "type": "boolean",
+          "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
         },
         "custom_provider_config": {
           "$ref": "#/$defs/custom_provider_config"
@@ -2700,6 +2756,14 @@
           "type": "boolean",
           "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
         },
+        "store_inbound_request": {
+          "type": "boolean",
+          "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+        },
+        "store_internal_bifrost_request": {
+          "type": "boolean",
+          "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
+        },
         "custom_provider_config": {
           "$ref": "#/$defs/custom_provider_config"
         }
@@ -2737,6 +2801,14 @@
         "store_raw_request_response": {
           "type": "boolean",
           "description": "Capture raw request/response for internal logging only; strip from API responses returned to clients (default: false)"
+        },
+        "store_inbound_request": {
+          "type": "boolean",
+          "description": "Capture the inbound HTTP request received by Bifrost for internal logging only (default: false)"
+        },
+        "store_internal_bifrost_request": {
+          "type": "boolean",
+          "description": "Capture the converted internal Bifrost request for internal logging only (default: false)"
         },
         "custom_provider_config": {
           "$ref": "#/$defs/custom_provider_config"
