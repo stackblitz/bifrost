@@ -131,7 +131,7 @@ func splitIntoModelProvider(bifrostModelName string) (inferenceProvider, string,
 	// Extract provider and model name
 	t := strings.Count(bifrostModelName, "/")
 	if t == 0 {
-		return "", "", fmt.Errorf("invalid model name format: %s", bifrostModelName)
+		return "", bifrostModelName, nil
 	}
 	var prov inferenceProvider
 	var model string
