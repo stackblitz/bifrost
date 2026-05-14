@@ -1338,10 +1338,45 @@ func HandleOpenAIChatCompletionStreaming(
 }
 
 // Responses performs a responses request to the OpenAI API.
+// shouldFallbackResponsesToChat reports whether a custom provider has opted into
+// translating Responses-API calls into Chat Completions. Triggered when a chat
+// path override is configured without a corresponding responses override.
+func (provider *OpenAIProvider) shouldFallbackResponsesToChat() bool {
+	if provider.customProviderConfig == nil {
+		return false
+	}
+	over := provider.customProviderConfig.RequestPathOverrides
+	if over == nil {
+		return false
+	}
+	_, hasChat := over[schemas.ChatCompletionRequest]
+	if !hasChat {
+		_, hasChat = over[schemas.ChatCompletionStreamRequest]
+	}
+	if !hasChat {
+		return false
+	}
+	if _, hasResp := over[schemas.ResponsesRequest]; hasResp {
+		return false
+	}
+	if _, hasResp := over[schemas.ResponsesStreamRequest]; hasResp {
+		return false
+	}
+	return true
+}
+
 func (provider *OpenAIProvider) Responses(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
 	// Check if chat completion is allowed for this provider
 	if err := providerUtils.CheckOperationAllowed(schemas.OpenAI, provider.customProviderConfig, schemas.ResponsesRequest); err != nil {
 		return nil, err
+	}
+
+	if provider.shouldFallbackResponsesToChat() {
+		chatResponse, err := provider.ChatCompletion(ctx, key, request.ToChatRequest())
+		if err != nil {
+			return nil, err
+		}
+		return chatResponse.ToBifrostResponsesResponse(), nil
 	}
 
 	if provider.disableStore {
@@ -1505,6 +1540,10 @@ func (provider *OpenAIProvider) ResponsesStream(ctx *schemas.BifrostContext, pos
 	// Check if chat completion stream is allowed for this provider
 	if err := providerUtils.CheckOperationAllowed(schemas.OpenAI, provider.customProviderConfig, schemas.ResponsesStreamRequest); err != nil {
 		return nil, err
+	}
+	if provider.shouldFallbackResponsesToChat() {
+		ctx.SetValue(schemas.BifrostContextKeyIsResponsesToChatCompletionFallback, true)
+		return provider.ChatCompletionStream(ctx, postHookRunner, postHookSpanFinalizer, key, request.ToChatRequest())
 	}
 	var authHeader map[string]string
 	if key.Value.GetValue() != "" {
