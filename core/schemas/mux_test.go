@@ -323,6 +323,140 @@ func TestToBifrostResponsesStreamResponse_PopulatesFinalDoneTextAndCompletedOutp
 	}
 }
 
+func TestToBifrostResponsesStreamResponse_ReasoningAndTextUseSeparateOutputItems(t *testing.T) {
+	state := AcquireChatToResponsesStreamState()
+	defer ReleaseChatToResponsesStreamState(state)
+
+	makeChunk := func(role *string, reasoning *string, content *string, finishReason *string) *BifrostChatResponse {
+		return &BifrostChatResponse{
+			ID:    "chatcmpl-reasoning",
+			Model: "test-model",
+			Choices: []BifrostResponseChoice{
+				{
+					FinishReason: finishReason,
+					ChatStreamResponseChoice: &ChatStreamResponseChoice{
+						Delta: &ChatStreamResponseChoiceDelta{
+							Role:      role,
+							Reasoning: reasoning,
+							Content:   content,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	role := string(ChatMessageRoleAssistant)
+	reasoning1 := "I need "
+	reasoning2 := "to think."
+	text1 := "Why"
+	text2 := " it works."
+	stop := string(BifrostFinishReasonStop)
+
+	var all []*BifrostResponsesStreamResponse
+	all = append(all, makeChunk(&role, nil, nil, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, makeChunk(nil, &reasoning1, nil, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, makeChunk(nil, &reasoning2, nil, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, makeChunk(nil, nil, &text1, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, makeChunk(nil, nil, &text2, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, makeChunk(nil, nil, nil, &stop).ToBifrostResponsesStreamResponse(state)...)
+
+	indexOf := func(match func(*BifrostResponsesStreamResponse) bool) int {
+		for i, evt := range all {
+			if evt != nil && match(evt) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	reasoningAddedIdx := indexOf(func(evt *BifrostResponsesStreamResponse) bool {
+		return evt.Type == ResponsesStreamResponseTypeOutputItemAdded &&
+			evt.OutputIndex != nil && *evt.OutputIndex == 0 &&
+			evt.Item != nil && evt.Item.Type != nil && *evt.Item.Type == ResponsesMessageTypeReasoning
+	})
+	reasoningDoneIdx := indexOf(func(evt *BifrostResponsesStreamResponse) bool {
+		return evt.Type == ResponsesStreamResponseTypeOutputItemDone &&
+			evt.OutputIndex != nil && *evt.OutputIndex == 0 &&
+			evt.Item != nil && evt.Item.Type != nil && *evt.Item.Type == ResponsesMessageTypeReasoning
+	})
+	textAddedIdx := indexOf(func(evt *BifrostResponsesStreamResponse) bool {
+		return evt.Type == ResponsesStreamResponseTypeOutputItemAdded &&
+			evt.OutputIndex != nil && *evt.OutputIndex == 1 &&
+			evt.Item != nil && evt.Item.Type != nil && *evt.Item.Type == ResponsesMessageTypeMessage
+	})
+	firstTextDeltaIdx := indexOf(func(evt *BifrostResponsesStreamResponse) bool {
+		return evt.Type == ResponsesStreamResponseTypeOutputTextDelta
+	})
+
+	if reasoningAddedIdx == -1 {
+		t.Fatal("expected reasoning output_item.added at output index 0")
+	}
+	if reasoningDoneIdx == -1 {
+		t.Fatal("expected reasoning output_item.done at output index 0")
+	}
+	if textAddedIdx == -1 {
+		t.Fatal("expected text output_item.added at output index 1")
+	}
+	if firstTextDeltaIdx == -1 {
+		t.Fatal("expected output_text.delta")
+	}
+	if !(reasoningAddedIdx < reasoningDoneIdx && reasoningDoneIdx < textAddedIdx && textAddedIdx < firstTextDeltaIdx) {
+		t.Fatalf("unexpected event order: reasoningAdded=%d reasoningDone=%d textAdded=%d firstTextDelta=%d", reasoningAddedIdx, reasoningDoneIdx, textAddedIdx, firstTextDeltaIdx)
+	}
+
+	var reasoningDeltaCount, textDeltaCount int
+	for _, evt := range all {
+		if evt == nil {
+			continue
+		}
+		switch evt.Type {
+		case ResponsesStreamResponseTypeReasoningSummaryTextDelta:
+			reasoningDeltaCount++
+			if evt.OutputIndex == nil || *evt.OutputIndex != 0 {
+				t.Fatalf("reasoning delta output index = %v, want 0", evt.OutputIndex)
+			}
+		case ResponsesStreamResponseTypeOutputTextDelta:
+			textDeltaCount++
+			if evt.OutputIndex == nil || *evt.OutputIndex != 1 {
+				t.Fatalf("text delta output index = %v, want 1", evt.OutputIndex)
+			}
+			if evt.Delta == nil || *evt.Delta == "" {
+				t.Fatal("did not expect empty text delta for reasoning-only chunks")
+			}
+		}
+	}
+	if reasoningDeltaCount != 2 {
+		t.Fatalf("expected 2 reasoning deltas, got %d", reasoningDeltaCount)
+	}
+	if textDeltaCount != 2 {
+		t.Fatalf("expected 2 text deltas, got %d", textDeltaCount)
+	}
+
+	var completed *BifrostResponsesStreamResponse
+	for _, evt := range all {
+		if evt != nil && evt.Type == ResponsesStreamResponseTypeCompleted {
+			completed = evt
+		}
+	}
+	if completed == nil || completed.Response == nil || len(completed.Response.Output) != 2 {
+		t.Fatal("expected response.completed with reasoning and text outputs")
+	}
+	if completed.Response.Output[0].Type == nil || *completed.Response.Output[0].Type != ResponsesMessageTypeReasoning {
+		t.Fatal("expected completed output[0] to be reasoning")
+	}
+	if completed.Response.Output[1].Type == nil || *completed.Response.Output[1].Type != ResponsesMessageTypeMessage {
+		t.Fatal("expected completed output[1] to be message")
+	}
+	textOutput := completed.Response.Output[1]
+	if textOutput.Content == nil || len(textOutput.Content.ContentBlocks) == 0 || textOutput.Content.ContentBlocks[0].Text == nil {
+		t.Fatal("expected completed text output to include text")
+	}
+	if *textOutput.Content.ContentBlocks[0].Text != "Why it works." {
+		t.Fatalf("completed text = %q, want %q", *textOutput.Content.ContentBlocks[0].Text, "Why it works.")
+	}
+}
+
 func TestToBifrostResponsesResponse_MapsLengthToIncomplete(t *testing.T) {
 	length := string(BifrostFinishReasonLength)
 	resp := (&BifrostChatResponse{

@@ -1367,7 +1367,12 @@ type ChatToResponsesStreamState struct {
 	TextItemAdded         bool              // Whether text item has been added
 	TextItemClosed        bool              // Whether text item has been closed
 	TextItemHasContent    bool              // Whether text item has received any content deltas
+	TextOutputIndex       int               // Output index for the text item
 	TextBuffer            strings.Builder   // Accumulated text deltas for output_text.done/content_part.done
+	ReasoningItemAdded    bool              // Whether reasoning item has been added
+	ReasoningItemClosed   bool              // Whether reasoning item has been closed
+	ReasoningOutputIndex  int               // Output index for the reasoning item
+	ReasoningBuffer       strings.Builder   // Accumulated reasoning deltas
 	CurrentOutputIndex    int               // Current output index counter
 	ToolCallOutputIndices map[string]int    // Maps tool call ID to output index
 	SequenceNumber        int               // Monotonic sequence number across all chunks
@@ -1390,7 +1395,12 @@ var chatToResponsesStreamStatePool = sync.Pool{
 			TextItemAdded:         false,
 			TextItemClosed:        false,
 			TextItemHasContent:    false,
+			TextOutputIndex:       -1,
 			TextBuffer:            strings.Builder{},
+			ReasoningItemAdded:    false,
+			ReasoningItemClosed:   false,
+			ReasoningOutputIndex:  -1,
+			ReasoningBuffer:       strings.Builder{},
 		}
 	},
 }
@@ -1435,7 +1445,12 @@ func AcquireChatToResponsesStreamState() *ChatToResponsesStreamState {
 	state.TextItemAdded = false
 	state.TextItemClosed = false
 	state.TextItemHasContent = false
+	state.TextOutputIndex = -1
 	state.TextBuffer = strings.Builder{}
+	state.ReasoningItemAdded = false
+	state.ReasoningItemClosed = false
+	state.ReasoningOutputIndex = -1
+	state.ReasoningBuffer = strings.Builder{}
 	state.SequenceNumber = 0
 	return state
 }
@@ -1469,10 +1484,88 @@ func ReleaseChatToResponsesStreamState(state *ChatToResponsesStreamState) {
 		state.TextItemAdded = false
 		state.TextItemClosed = false
 		state.TextItemHasContent = false
+		state.TextOutputIndex = -1
 		state.TextBuffer = strings.Builder{}
+		state.ReasoningItemAdded = false
+		state.ReasoningItemClosed = false
+		state.ReasoningOutputIndex = -1
+		state.ReasoningBuffer = strings.Builder{}
 		state.SequenceNumber = 0
 		chatToResponsesStreamStatePool.Put(state)
 	}
+}
+
+func (state *ChatToResponsesStreamState) nextOutputIndex() int {
+	outputIndex := state.CurrentOutputIndex
+	state.CurrentOutputIndex = outputIndex + 1
+	return outputIndex
+}
+
+func chatToResponsesItemID(messageID *string, prefix string, outputIndex int) string {
+	if messageID == nil {
+		return fmt.Sprintf("%s_%d", prefix, outputIndex)
+	}
+	return fmt.Sprintf("msg_%s_%s_%d", *messageID, prefix, outputIndex)
+}
+
+func (state *ChatToResponsesStreamState) appendReasoningItemDone(responses []*BifrostResponsesStreamResponse, extraFields BifrostResponseExtraFields, status string) []*BifrostResponsesStreamResponse {
+	if !state.ReasoningItemAdded || state.ReasoningItemClosed || state.ReasoningOutputIndex < 0 {
+		return responses
+	}
+
+	outputIndex := state.ReasoningOutputIndex
+	contentIndex := 0
+	summaryIndex := 0
+	itemID := state.ItemIDs["reasoning"]
+	finalReasoning := state.ReasoningBuffer.String()
+
+	reasoningDone := &BifrostResponsesStreamResponse{
+		Type:           ResponsesStreamResponseTypeReasoningSummaryTextDone,
+		SequenceNumber: state.SequenceNumber,
+		OutputIndex:    Ptr(outputIndex),
+		ContentIndex:   Ptr(contentIndex),
+		SummaryIndex:   Ptr(summaryIndex),
+		Text:           &finalReasoning,
+		ExtraFields:    extraFields,
+	}
+	if itemID != "" {
+		reasoningDone.ItemID = &itemID
+	}
+	responses = append(responses, reasoningDone)
+	state.SequenceNumber++
+
+	messageType := ResponsesMessageTypeReasoning
+	role := ResponsesInputMessageRoleAssistant
+	summaryType := ResponsesReasoningContentBlockTypeSummaryText
+	doneItem := &ResponsesMessage{
+		Type:   &messageType,
+		Role:   &role,
+		Status: &status,
+		ResponsesReasoning: &ResponsesReasoning{
+			Summary: []ResponsesReasoningSummary{
+				{
+					Type: summaryType,
+					Text: finalReasoning,
+				},
+			},
+		},
+	}
+	if itemID != "" {
+		doneItem.ID = &itemID
+	}
+
+	responses = append(responses, &BifrostResponsesStreamResponse{
+		Type:           ResponsesStreamResponseTypeOutputItemDone,
+		SequenceNumber: state.SequenceNumber,
+		OutputIndex:    Ptr(outputIndex),
+		ContentIndex:   Ptr(contentIndex),
+		Item:           doneItem,
+		ExtraFields:    extraFields,
+	})
+	state.SequenceNumber++
+	state.ReasoningItemClosed = true
+
+	return responses
 }
 
 // ToBifrostResponsesStreamResponse converts the BifrostChatResponse from Chat streaming format to Responses streaming format
@@ -1541,19 +1634,70 @@ func (cr *BifrostChatResponse) ToBifrostResponsesStreamResponse(state *ChatToRes
 	hasContent := delta.Content != nil && *delta.Content != ""
 	hasReasoning := delta.Reasoning != nil && *delta.Reasoning != ""
 
-	// Create output items if we have content OR reasoning (for reasoning-only models)
-	if hasContent || (hasReasoning && !state.TextItemAdded) {
-		// Text content delta (or reasoning-only response)
+	if hasReasoning {
+		if !state.ReasoningItemAdded {
+			outputIndex := state.nextOutputIndex()
+			itemID := chatToResponsesItemID(state.MessageID, "reasoning", outputIndex)
+			state.ItemIDs["reasoning"] = itemID
+			state.ReasoningOutputIndex = outputIndex
+
+			messageType := ResponsesMessageTypeReasoning
+			role := ResponsesInputMessageRoleAssistant
+
+			item := &ResponsesMessage{
+				ID:   &itemID,
+				Type: &messageType,
+				Role: &role,
+				ResponsesReasoning: &ResponsesReasoning{
+					Summary: []ResponsesReasoningSummary{},
+				},
+			}
+
+			responses = append(responses, &BifrostResponsesStreamResponse{
+				Type:           ResponsesStreamResponseTypeOutputItemAdded,
+				SequenceNumber: state.SequenceNumber,
+				OutputIndex:    Ptr(outputIndex),
+				ContentIndex:   Ptr(0),
+				Item:           item,
+				ExtraFields:    cr.ExtraFields,
+			})
+			state.SequenceNumber++
+			state.ReasoningItemAdded = true
+		}
+
+		outputIndex := state.ReasoningOutputIndex
+		itemID := state.ItemIDs["reasoning"]
+		summaryIndex := 0
+		state.ReasoningBuffer.WriteString(*delta.Reasoning)
+
+		response := &BifrostResponsesStreamResponse{
+			Type:           ResponsesStreamResponseTypeReasoningSummaryTextDelta,
+			SequenceNumber: state.SequenceNumber,
+			OutputIndex:    Ptr(outputIndex),
+			ContentIndex:   Ptr(0),
+			SummaryIndex:   Ptr(summaryIndex),
+			Delta:          delta.Reasoning,
+			ExtraFields:    cr.ExtraFields,
+		}
+		if itemID != "" {
+			response.ItemID = &itemID
+		}
+		responses = append(responses, response)
+		state.SequenceNumber++
+	}
+
+	if hasContent {
+		if state.ReasoningItemAdded && !state.ReasoningItemClosed {
+			responses = state.appendReasoningItemDone(responses, cr.ExtraFields, "completed")
+		}
+
+		// Text content delta
 		if !state.TextItemAdded {
 			// Add text item if not already added
-			outputIndex := 0
+			outputIndex := state.nextOutputIndex()
+			state.TextOutputIndex = outputIndex
 			// Generate stable ID for text item
-			var itemID string
-			if state.MessageID == nil {
-				itemID = fmt.Sprintf("item_%d", outputIndex)
-			} else {
-				itemID = fmt.Sprintf("msg_%s_item_%d", *state.MessageID, outputIndex)
-			}
+			itemID := chatToResponsesItemID(state.MessageID, "item", outputIndex)
 			state.ItemIDs["text"] = itemID
 
 			messageType := ResponsesMessageTypeMessage
@@ -1601,24 +1745,17 @@ func (cr *BifrostChatResponse) ToBifrostResponsesStreamResponse(state *ChatToRes
 			state.SequenceNumber++
 		}
 
-		// Emit text delta - at least one is required for lifecycle validation
-		// Even for reasoning-only responses, we emit an empty delta on the first chunk
-		if hasContent || (!state.TextItemHasContent && (hasReasoning || hasContent)) {
+		// Emit text delta
+		if hasContent {
+			outputIndex := state.TextOutputIndex
 			itemID := state.ItemIDs["text"]
-
-			var contentDelta string
-			if hasContent {
-				contentDelta = *delta.Content
-				state.TextBuffer.WriteString(contentDelta)
-			} else {
-				// For reasoning-only responses, emit empty delta on first chunk
-				contentDelta = ""
-			}
+			contentDelta := *delta.Content
+			state.TextBuffer.WriteString(contentDelta)
 
 			response := &BifrostResponsesStreamResponse{
 				Type:           ResponsesStreamResponseTypeOutputTextDelta,
 				SequenceNumber: state.SequenceNumber,
-				OutputIndex:    Ptr(0),
+				OutputIndex:    Ptr(outputIndex),
 				ContentIndex:   Ptr(0),
 				Delta:          &contentDelta,
 				LogProbs:       []ResponsesOutputMessageContentTextLogProb{},
@@ -1656,9 +1793,14 @@ func (cr *BifrostChatResponse) ToBifrostResponsesStreamResponse(state *ChatToRes
 		// Check if this is a new tool call (only when ID is present)
 		if toolCall.ID != nil && *toolCall.ID != "" {
 			if _, exists := state.ToolCallOutputIndices[toolCallID]; !exists {
+				// Close reasoning item before starting the next output block.
+				if state.ReasoningItemAdded && !state.ReasoningItemClosed {
+					responses = state.appendReasoningItemDone(responses, cr.ExtraFields, "completed")
+				}
+
 				// Close text item if still open and has content
 				if state.TextItemAdded && !state.TextItemClosed && state.TextItemHasContent {
-					outputIndex := 0
+					outputIndex := state.TextOutputIndex
 					itemID := state.ItemIDs["text"]
 
 					finalText := state.TextBuffer.String()
@@ -1797,19 +1939,6 @@ func (cr *BifrostChatResponse) ToBifrostResponsesStreamResponse(state *ChatToRes
 		}
 	}
 
-	if delta.Reasoning != nil && *delta.Reasoning != "" {
-		// Reasoning/thought content delta (for models that support reasoning)
-		response := &BifrostResponsesStreamResponse{
-			Type:           ResponsesStreamResponseTypeReasoningSummaryTextDelta,
-			SequenceNumber: state.SequenceNumber,
-			OutputIndex:    Ptr(0),
-			Delta:          delta.Reasoning,
-			ExtraFields:    cr.ExtraFields,
-		}
-		responses = append(responses, response)
-		state.SequenceNumber++
-	}
-
 	if delta.Refusal != nil && *delta.Refusal != "" {
 		// Refusal delta
 		response := &BifrostResponsesStreamResponse{
@@ -1827,9 +1956,13 @@ func (cr *BifrostChatResponse) ToBifrostResponsesStreamResponse(state *ChatToRes
 	if choice.FinishReason != nil {
 		terminalEventType, terminalStatus, terminalIncompleteDetails := responsesTerminalFromChatFinishReason(choice.FinishReason)
 
-		// Close text item if still open (regardless of whether it has content, to support reasoning-only responses)
+		if state.ReasoningItemAdded && !state.ReasoningItemClosed {
+			responses = state.appendReasoningItemDone(responses, cr.ExtraFields, terminalStatus)
+		}
+
+		// Close text item if still open
 		if state.TextItemAdded && !state.TextItemClosed {
-			outputIndex := 0
+			outputIndex := state.TextOutputIndex
 			itemID := state.ItemIDs["text"]
 
 			finalText := state.TextBuffer.String()
@@ -1977,6 +2110,33 @@ func (cr *BifrostChatResponse) ToBifrostResponsesStreamResponse(state *ChatToRes
 			response.Model = *state.Model
 		}
 		var allOutput []ResponsesMessage
+
+		if state.ReasoningItemAdded {
+			statusFinal := terminalStatus
+			messageType := ResponsesMessageTypeReasoning
+			role := ResponsesInputMessageRoleAssistant
+			summaryType := ResponsesReasoningContentBlockTypeSummaryText
+			finalReasoning := state.ReasoningBuffer.String()
+			itemID := state.ItemIDs["reasoning"]
+
+			msg := ResponsesMessage{
+				Type:   &messageType,
+				Role:   &role,
+				Status: &statusFinal,
+				ResponsesReasoning: &ResponsesReasoning{
+					Summary: []ResponsesReasoningSummary{
+						{
+							Type: summaryType,
+							Text: finalReasoning,
+						},
+					},
+				},
+			}
+			if itemID != "" {
+				msg.ID = &itemID
+			}
+			allOutput = append(allOutput, msg)
+		}
 
 		if state.TextItemAdded {
 			statusFinal := terminalStatus
