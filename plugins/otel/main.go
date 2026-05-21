@@ -150,6 +150,20 @@ func Init(ctx context.Context, config *Config, _logger schemas.Logger, pricingMa
 			}
 		}
 	}
+	if newValue, ok := strings.CutPrefix(config.CollectorURL, "env."); ok {
+		config.CollectorURL = os.Getenv(newValue)
+		if config.CollectorURL == "" {
+			logger.Warn("environment variable %s not found", newValue)
+			return nil, fmt.Errorf("environment variable %s not found", newValue)
+		}
+	}
+	if newValue, ok := strings.CutPrefix(config.MetricsEndpoint, "env."); ok {
+		config.MetricsEndpoint = os.Getenv(newValue)
+		if config.MetricsEndpoint == "" {
+			logger.Warn("environment variable %s not found", newValue)
+			return nil, fmt.Errorf("environment variable %s not found", newValue)
+		}
+	}
 	if config.PluginSpanFilter != nil {
 		switch config.PluginSpanFilter.Mode {
 		case PluginSpanFilterModeInclude, PluginSpanFilterModeExclude:
